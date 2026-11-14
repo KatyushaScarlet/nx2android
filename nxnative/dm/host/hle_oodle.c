@@ -176,6 +176,13 @@ void dm_oodle_job_maybe(void) {
     fflush(stderr); _exit(bad ? 1 : 0);
 }
 
+// DM_OODLE_JOB_EARLY=1: the same job before nninitStartup, for a game whose provisional memory layout cannot boot yet.
+// dec_run passes Oodle an explicit scratch buffer, so this path does not depend on the game's heap
+void dm_oodle_job_maybe_early(void) {
+    const char *job = getenv("DM_OODLE_JOB"), *early = getenv("DM_OODLE_JOB_EARLY");
+    if (job && *job && early && atoi(early)) dm_oodle_job_maybe();
+}
+
 static int read_all(int fd, void *p, size_t n) {
     for (uint8_t *q = p; n; ) { ssize_t k = read(fd, q, n); if (k <= 0) return 0; q += k; n -= (size_t)k; }
     return 1;

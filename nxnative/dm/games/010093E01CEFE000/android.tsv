@@ -1,0 +1,10 @@
+# GUNDAM BREAKER 4 on Android (keys in docs/ARCHITECTURE.md "Game profiles on Android")
+# Bandai Namco's Unreal Engine 4.27 game, update v720896 (1.12.0, SDK 12.3.2), 15,950 shaders, all translated. On the AYN Thor (Adreno 740, Android 13): the boot, the language selection
+# (Korean, Traditional and Simplified Chinese render through the shared font) and the opening at 60 fps (frame time p50 16.66-16.67 ms, p95 17.2 ms, 0 dropped frames in the 600-900 frame
+# window, GPU about 2 ms, footprint about 1.2 GB, CRIWARE sound, no audio underrun after the first sound, no red log line). The data pack is 7.1 GB (RomFS 6.7 GB, shaders.dmsv 257 MB).
+# What it needed: this tree's shader_split.py reads the pak's inline shaders from the cooked packages decoded on the device (DM_UE_INLINE_DECODED, pipeline.py device_ue_inline; the host's
+# Oodle tool mode gained DM_OODLE_JOB_EARLY), the FMallocBinned3 cut above, and the frame limits of hle_fpslock.c (fps_target 60). Not tested yet: gameplay past the opening, saves, DLC content
+status	boots
+tested	v720896 AYN Thor (Snapdragon 8 Gen 2, Adreno 740, Android 13)
+package	org.nx2a.t010093e01cefe000
+orientation	landscape

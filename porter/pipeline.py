@@ -451,15 +451,26 @@ class Port:
         self.oodle_why = src['oodle_packs'][1] if src['oodle_packs'][0] and ('GFPAK' in src['oodle_packs'][1] or 'Trinity' in src['oodle_packs'][1]) else ''
         # Unreal paks (version 11) and IoStore containers: their shader code archives are decoded with the game's own Oodle on the device too (device_ue)
         self.ue_why = src['ue_decode'][1] if src['ue_decode'][0] else ''
-        why = self.oodle_why or self.ue_why
+        # A version 11 pak with no shader code archives keeps the shaders inline in the cooked packages (OCTOPATH TRAVELER II, GUNDAM BREAKER 4); its blocks are Oodle-compressed, so the
+        # device decodes them (device_ue_inline). Only when there is no archive to decode, as before
+        self.ue_inline_why = ''
+        inline = []
+        for p in uepak.paks(str(self.game / 'RomFS')):
+            try: pk = uepak.Pak(p)
+            except (OSError, ValueError): continue
+            if not any(n.endswith('.ushaderbytecode') for n in pk.files) and any(n.endswith('.uexp') for n in pk.files): inline.append(p)
+        if inline:
+            self.ue_inline_why = f'{len(inline)} version 11 Unreal pak(s) with the shaders inline in the cooked packages'
+            self.ue_why = ''   # no shader code archives to decode
+        why = self.oodle_why or self.ue_why or self.ue_inline_why
         if why:
             if not self.tools.get('adb'):   # adb is optional for a port that does not install (toolchain.require): this one needs it
-                raise BuildError(f"{self.app_name}'s shaders are in Oodle-compressed archives ({why}): the port decodes them with the game's own decoder on the Android "
+                raise BuildError(f"{self.app_name}'s shaders are Oodle-compressed ({why}): the port decodes them with the game's own decoder on the Android "
                                  f'device, so it needs adb and the device even without installing. {NO_ADB}; then connect the device (USB debugging on) and port again')
             try: Adb(self.tools['adb'], self.o.device or self.cfg.get('device'), log=say).pick()
-            except (AdbError, KeyError) as e: raise BuildError(f"{self.app_name}'s shaders are in Oodle-compressed archives ({why}): the port decodes them with the game's own decoder on "
+            except (AdbError, KeyError) as e: raise BuildError(f"{self.app_name}'s shaders are Oodle-compressed ({why}): the port decodes them with the game's own decoder on "
                                                                f'the Android device, so connect it (adb) and port again ({e})') from e
-        for k in ('glslc_capture', 'ue_legacy') + (() if self.ue_why else ('ue_decode',)) + (() if self.oodle_why else ('oodle_packs',)):
+        for k in ('glslc_capture', 'ue_legacy') + (() if (self.ue_why or self.ue_inline_why) else ('ue_decode',)) + (() if self.oodle_why else ('oodle_packs',)):
             if src[k][0]: raise BuildError(f'{self.app_name} needs a step that boots the game in the Mac host ({src[k][1]}), which the Android port cannot run yet')
 
     # ---- the game's own Oodle decoder on the device, for the shader split (Pokémon Legends: Arceus's GFPAKs, Pokémon Legends: Z-A's Trinity packs) ----
@@ -530,9 +541,10 @@ class Port:
         say(f"shaders in Oodle-compressed archives ({self.oodle_why}): {len(recs):,} entries decoded by the game's own decoder on the device, "
             f"{sum(len(e) for _, e in by.values()):,} of them hold shaders")
         return {'DM_GFPAK_DECODED': str(dec)}
-    def device_oodle_job(self, job, out, bnsh=False):
+    def device_oodle_job(self, job, out, bnsh=False, early=False):
         """One Oodle job file (hle_oodle.c: "DMOJ" records) decoded on the device into out ("DMOR"); the job file is removed. The host as an executable and the rewritten modules
-        go to the device once a port (device_oodle_end removes them). bnsh: only the entries that hold a BNSH shader come back (DM_OODLE_JOB_BNSH)"""
+        go to the device once a port (device_oodle_end removes them). bnsh: only the entries that hold a BNSH shader come back (DM_OODLE_JOB_BNSH). early: the host decodes before
+        nninitStartup (DM_OODLE_JOB_EARLY), for a provisional Unreal profile whose memory layout cannot boot yet"""
         adb = getattr(self, 'oodle_adb', None)
         if not adb:
             adb = Adb(self.tools['adb'], self.o.device or self.cfg.get('device'), log=say); adb.pick()
@@ -545,12 +557,68 @@ class Port:
             self.oodle_adb = adb
         adb.push_file(job, f'{self.ODEV}/job.bin'); nsp.rmtree(job)
         # (the device's timeout ends the decoder before adb gives up, so no decoder is left running and holding memory on the device)
-        r = adb.shell(f'chmod 755 {self.ODEV}/dmhost; cd {self.ODEV} && rm -f job.bin.out && DM_OODLE_JOB={self.ODEV}/job.bin{" DM_OODLE_JOB_BNSH=1" if bnsh else ""} timeout 3300 ./dmhost mods '
+        r = adb.shell(f'chmod 755 {self.ODEV}/dmhost; cd {self.ODEV} && rm -f job.bin.out && DM_OODLE_JOB={self.ODEV}/job.bin{" DM_OODLE_JOB_BNSH=1" if bnsh else ""}{" DM_OODLE_JOB_EARLY=1" if early else ""} timeout 3300 ./dmhost mods '
                       f'> job.log 2>&1; echo "exit $?"; grep -a -e DM_OODLE_JOB -e RED job.log | tail -5', timeout=3600)
         (self.logs / 'android_oodle_job.log').write_text(r, encoding='utf-8')
         if 'exit 0' not in r: raise BuildError(f"the game's Oodle decoder on the device failed (see {self.logs / 'android_oodle_job.log'})")
         adb.run('pull', f'{self.ODEV}/job.bin.out', str(out), timeout=1800)
         adb.shell(f'rm -f {self.ODEV}/job.bin {self.ODEV}/job.bin.out', check=False)
+
+    # ---- Unreal version 11 paks with the shaders inline in the cooked packages (OCTOPATH TRAVELER II's layout, GUNDAM BREAKER 4), decoded from Oodle-compressed pak blocks on the device ----
+    def device_ue_inline(self):
+        """A version 11 pak with no shader code archives keeps each material's shaders inline in its .uexp and the engine's global shaders in Engine/GlobalShaderCache-<format>.bin; its blocks are
+        Oodle-compressed, so the game's own decoder on the device decodes every .uexp and global cache file (DM_UE_INLINE_DECODED, which shader_split.py's ue_inline_shaders scans for the LZ4
+        records of FShaderMapResourceCode). One job holds the blocks of all of them (GUNDAM BREAKER 4: 79,369 files, 14.9 GB decoded). The host decodes before nninitStartup
+        (DM_OODLE_JOB_EARLY) because a provisional Unreal profile's memory layout cannot boot yet; stored and zlib entries are read here, as Pak.read does"""
+        import struct
+        vers = [v for v in self.versions if (self.dirs[v] / 'RomFS').is_dir()]
+        if not vers: raise BuildError('the extracted RomFS is missing; the Unreal pak cannot be read')
+        PROG.add(1); PROG.stage('UE inline shader decode', step='the paks')
+        tmp = self.work / 'tmp/ue_inline'; nsp.rmtree(tmp); tmp.mkdir(parents=True, exist_ok=True)
+        out_dir = tmp / 'decoded'; out_dir.mkdir()
+        job = tmp / 'job.bin'; recs = []; direct = {}
+        with open(job, 'wb') as jf:
+            jf.write(b'DMOJ' + struct.pack('<I', 0))
+            for v in vers:
+                for pak in uepak.paks(str(self.dirs[v] / 'RomFS')):
+                    try: pk = uepak.Pak(pak)
+                    except (OSError, ValueError): continue
+                    if any(n.endswith('.ushaderbytecode') for n in pk.files): continue
+                    for name in sorted(pk.files):
+                        if not (name.endswith('.uexp') or os.path.basename(name).startswith('GlobalShaderCache-')): continue
+                        e = pk.entry(name)
+                        if e['method'] != 'Oodle':   # stored or zlib: uepak reads it without the device
+                            direct[name] = pk.read(name); continue
+                        left = e['raw']
+                        for s, nb in e['blocks']:
+                            comp = pk.read_at(e['off'] + s, nb, e['encrypted'])
+                            raw = min(left, e['block_size']); left -= raw
+                            jf.write(struct.pack('<II', len(comp), raw) + comp); recs.append((name, raw))
+            jf.seek(4); jf.write(struct.pack('<I', len(recs)))
+        PROG.set(step=f'{len(recs):,} pak blocks, {job.stat().st_size / 2**30:.2f} GB')
+        out = tmp / 'job.out'
+        self.device_oodle_job(job, out, early=True)
+        with open(out, 'rb') as f:
+            head = f.read(8)
+            if head[:4] != b'DMOR' or struct.unpack_from('<I', head, 4)[0] != len(recs): raise BuildError('the device answered for other pak blocks than it was given')
+            handles = {}
+            try:
+                for name, want in recs:
+                    ln = struct.unpack('<I', f.read(4))[0]
+                    if ln != want: raise BuildError(f'{name}: a pak block did not decode on the device ({ln} of {want} bytes)')
+                    h = handles.get(name)
+                    if h is None:
+                        path = out_dir / name; path.parent.mkdir(parents=True, exist_ok=True); h = handles[name] = open(path, 'wb')
+                    left = ln
+                    while left:
+                        chunk = f.read(min(left, 1 << 21)); h.write(chunk); left -= len(chunk)
+            finally:
+                for h in handles.values(): h.close()
+        for name, data in direct.items():
+            path = out_dir / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(data)
+        total = sum(p.stat().st_size for p in out_dir.rglob('*') if p.is_file())
+        PROG.end(f'{len(recs) + len(direct):,} files, {total / 2**30:.2f} GB decoded')
+        return {'DM_UE_INLINE_DECODED': str(out_dir), 'J': str(self.o.jobs)}
 
     # ---- Unreal Engine shader code archives decoded with the game's own Oodle on the device (the Mac does it in decode_ue_shaders) ----
     UE_ROUNDS = 4
@@ -664,8 +732,11 @@ class Port:
         sv = self.versions
         pkg = self.work / 'shader' / 'pkg'
         try:
-            if getattr(self, "ue_why", ""): self.device_ue()   # Unreal's shader code archives, decoded on the device into <version dir>/ue_shaders before the split reads them
-            nsp.split_shaders(PY, NXNATIVE, [self.dirs[v] / 'RomFS' for v in sv], [self.dirs[v] / 'ExeFS/main' for v in sv], pkg, self.env, self.logs, self.g, bool(self.derived or self.provisional),
+            env = self.env
+            if getattr(self, "ue_inline_why", ""):   # inline shaders in Oodle-compressed pak blocks: the device decodes the cooked packages
+                env = dict(self.env, **self.device_ue_inline())
+            elif getattr(self, "ue_why", ""): self.device_ue()   # Unreal's shader code archives, decoded on the device into <version dir>/ue_shaders before the split reads them
+            nsp.split_shaders(PY, NXNATIVE, [self.dirs[v] / 'RomFS' for v in sv], [self.dirs[v] / 'ExeFS/main' for v in sv], pkg, env, self.logs, self.g, bool(self.derived or self.provisional),
                                oodle=self.device_oodle if self.oodle_why else None,   # Oodle-compressed archives: the game's own decoder on the device
                                aoc=self.aoc)   # DLC with shaders of its own (Xenoblade Chronicles 3's archives)
         finally: self.device_oodle_end()

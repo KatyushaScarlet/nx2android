@@ -1120,8 +1120,12 @@ def ue_inline_shaders(d, label, out):
     """Shaders kept inline in cooked Unreal packages (UE 4.18, DRAGON QUEST XI S: each material's shader map in its .uexp, 38 to 87 shaders in the ones looked at, and the engine's global shaders in
     Engine/GlobalShaderCache-GLSL_SWITCH.bin, 945): each shader's code is a byte array (i32 length, then the bytes) holding one zlib stream, which inflates to an LSLG record as in the shader code
     archives (uepak.lslg). Found by the zlib header and the length in front of it: a stream that inflates whole from exactly that many bytes and starts with LSLG (every such stream in the files
-    looked at). A record stored without compression (LSLG right after its length) is taken too. The engine combines vertex and pixel shaders per draw (separable_pairs)"""
-    import zlib
+    looked at). A record stored without compression (LSLG right after its length) is taken too.
+    Unreal Engine 4.27 (OCTOPATH TRAVELER II, GUNDAM BREAKER 4: no shader code archives, each material's shaders in its .uexp, the global ones in Engine/GlobalShaderCache-SF_GLSL_SWITCH.bin) keeps
+    them as the entries of FShaderMapResourceCode: the code (i32 length, then an LZ4 block, the engine's shader compression since 4.26), the raw size (i32) and the frequency (u8). Found by the LZ4
+    block's first literals, which are the record's LSLG: the token (and its literal length bytes) right in front, the length before them, and a block that decodes to exactly the raw size after it.
+    The engine combines vertex and pixel shaders per draw (separable_pairs)"""
+    import zlib, lz4.block
     def take(s, at):
         rec = uepak.lslg(s)
         if not rec: red(f'{label}: the shader record at {at:#x} is not an LSLG record of the known layout')
@@ -1139,7 +1143,16 @@ def ue_inline_shaders(d, label, out):
         if z.eof and not z.unused_data and s[:4] == b'LSLG': take(s, i)
     for m in re.finditer(b'LSLG', d):
         i = m.start(); n = int.from_bytes(d[i - 4:i], 'little') if i >= 4 else 0
-        if 2 <= n <= len(d) - i and uepak.lslg(d[i:i + n]): take(d[i:i + n], i)
+        if 2 <= n <= len(d) - i and uepak.lslg(d[i:i + n]): take(d[i:i + n], i); continue
+        for j in range(i - 1, max(i - 6, 4) - 1, -1):   # an LZ4 block whose first literals start here: token at j, then (literal length 15 and up) its length bytes
+            t, ext = d[j] >> 4, d[j + 1:i]
+            if (t < 15 and ext) or (t == 15 and not (ext and ext[-1] < 0xff and all(x == 0xff for x in ext[:-1]))): continue
+            n = int.from_bytes(d[j - 4:j], 'little')
+            if not 8 <= n <= len(d) - j - 5: continue
+            raw = int.from_bytes(d[j + n:j + n + 4], 'little')
+            try: s = lz4.block.decompress(d[j:j + n], uncompressed_size=raw)
+            except Exception: continue
+            if len(s) == raw and s[:4] == b'LSLG': take(s, j); break
 
 def yaz0(s):
     """Yaz0 decompression (Super Mario 3D World + Bowser's Fury: almost all of RomFS is .szs = SARC wrapped in Yaz0). Pure Python runs at about 20–45 MB/s per core, under a minute for the whole 4.7 GB RomFS in parallel, and needs no extra dependency.
@@ -1358,6 +1371,7 @@ def separable_pairs(keys):
 
 SMASH_ARC = struct.pack('<Q', 0xABCDEF9876543210)   # smash_arc.MAGIC (scan_file reads only the first bytes, without importing the reader)
 UE_TAG = {'SV': 'vs', 'SH': 'hs', 'SD': 'ds', 'SG': 'gs', 'SP': 'ps', 'SC': 'cs'}
+UE_INLINE = 'UE inline decoded'   # a cooked package decoded from a version 11 pak's Oodle blocks on the device (DM_UE_INLINE_DECODED)
 def main_imports(img):   # the names main imports (its dynamic symbols)
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../tools')); import nso_syms
     return {s for s, defined, _ in nso_syms.dynsyms(img) if not defined}
@@ -1495,6 +1509,10 @@ def bnd2_shaders(d, label):
 def scan_file(args):
     """→ (relative path, {key: …}, pairs, extra); extra = this file's Unity type trees, or 'defer' (no type tree, scanned again in the second pass)"""
     path, rel = args[:2]
+    if len(args) > 2 and args[2] and args[2][0] == UE_INLINE:   # a cooked package decoded from a version 11 pak on the Android device
+        with open(path, 'rb') as f: d = f.read()
+        found = []; ue_inline_shaders(d, rel, found)
+        return rel, {skey(c, k): (w, s, c, k) for w, s, c, k in found}, var_pairs(found), {}
     stem, ext = os.path.splitext(path)
     if ext in ('.data', '.patch', '.debug', '.nxpc') and os.path.exists(stem + '.dict'): return rel, {}, set(), {}   # read through its Next Level Games index (nlg_shaders)
     with open(path, 'rb') as f: head = f.read(16)
@@ -1606,7 +1624,7 @@ def main():
         # Unreal Engine shader code archives decoded on the Mac (uepak.py): <version dir>/ue_shaders, or DM_UE_SHADERS; needed when the RomFS has Unreal paks
         ued = os.environ.get('DM_UE_SHADERS') or os.path.join(os.path.dirname(os.path.abspath(romfs)), 'ue_shaders')
         names = sorted(f for f in os.listdir(ued) if f.endswith('.ushaderbytecode')) if os.path.isdir(ued) else []
-        if not names and uepak.unreal_paks(romfs, legacy=False): red(f'the RomFS has Unreal paks, but there are no decoded shader code archives in {ued} (the NSP script writes them)')
+        if not names and 'DM_UE_INLINE_DECODED' not in os.environ and uepak.unreal_paks(romfs, legacy=False): red(f'the RomFS has Unreal paks, but there are no decoded shader code archives in {ued} (the NSP script writes them)')
         for nm in names: found += ue_shaders(open(os.path.join(ued, nm), 'rb').read(), f'/ue_shaders/{nm}')
         results.append(('main', {skey(c, k): (w, s, c, k) for w, s, c, k in found}, var_pairs(found), {}))
     # DLC content (DM_SPLIT_AOC: a folder holding each DLC's RomFS as <index>/, the NSP script's aoc/) can bring shaders of its own: Xenoblade Chronicles 3's Future Redeemed keeps its models,
@@ -1627,6 +1645,13 @@ def main():
     pz_jobs, pkzs = pkz_jobs(files)   # Bayonetta 3's PKZ archives, Oodle Kraken decoded by the game's own decoder in the Mac host
     ar_jobs, ards = ard_jobs(files)   # Xenoblade Chronicles 3's archive (bf3.arh / bf3.ard)
     big += pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs + pz_jobs + ar_jobs
+    # Unreal version 11 paks with the shaders inline in the cooked packages: the Android porter decoded their Oodle-compressed blocks on the device into DM_UE_INLINE_DECODED
+    idir = os.environ.get('DM_UE_INLINE_DECODED')
+    if idir and os.path.isdir(idir):
+        for dp, _, fs in os.walk(idir):
+            for f in fs:
+                p = os.path.join(dp, f)
+                big.append((p, '/ue_inline#' + os.path.relpath(p, idir).replace(os.sep, '/'), (UE_INLINE,)))
     files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts and p not in arcs and p not in pkzs and p not in ards]
     with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, {}, zdicts)) as ex:
         results += list(ex.map(scan_file, big)) + list(ex.map(scan_file, files, chunksize=16))

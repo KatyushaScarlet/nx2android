@@ -1,0 +1,47 @@
+# GUNDAM BREAKER 4 (Switch, update 1.12.0): Bandai Namco, Unreal Engine 4.27 (one version 11 pak with the shaders inline in the cooked packages, MallocBinned3), SDK 12.3.2, NVN, CRIWARE.
+# Started from the NSP script's provisional profile (dm/games/profile_guess.py) and brought up on the Android port; the shader tables were split with this repository's shader_split.py + the
+# decoded inline packages (DM_UE_INLINE_DECODED). Format: key <TAB> value; several values of one key are separated by spaces; comments must be on their own line
+
+# ---- Identity ----
+title_id	010093E01CEFE000
+program_id	010093E01CEFE000
+
+# ---- App ----
+name	GUNDAM BREAKER 4
+ipa	GundamBreaker4.ipa
+app_category	public.app-category.games
+
+# ---- Versions ----
+build	v720896	1.12.0	main=ba96dfdf82b7ac48ab945fef316c361c	subsdk0=dade22cfe6f24efe62d76409522c850b	sdk=5bcf525f24eb28658a8d67ac27800d9b
+package	v720896
+shader_versions	v720896
+
+# ---- Files ----
+modules	main subsdk0 sdk
+romfs_marker	GB4/Content/Paks/pakchunk0-Switch.pak
+zip_store	.pak:.metallib
+
+# ---- Graphics ----
+# 60 fps (30 on the Switch): the game's config sets t.MaxFPS=30 and rhi.syncinterval=2, and its engine runs with bUseFixedFrameRate on. The host writes t.MaxFPS 60 and rhi.SyncInterval 1 into
+# the console variables (hle_fpslock.c), and UEngine::FixedFrameRate 60 (the same build's host); present interval 1 then comes from the game. DM_FPS_TARGET=30 keeps the game's 30
+fps_target	60
+
+# ---- Memory ----
+# Unreal Engine 4.27: nninitStartup reserves a 62 GB engine region and FMallocBinned3 cuts 37 GB of pools out of it. This build's rewriter is older than the engine-wide rules, so the
+# FMallocBinned3 constructor entry is cut in patches.py and the region is capped by the game's own argument (game_args); the memory partition is OCTOPATH TRAVELER II's
+mem_reserve	0xF0000000
+mem_alias	0xC8000000
+mem_stack	0x10000000
+app_pool	0xCD500000
+sys_resource	0x5000000
+game_args	-SwitchVirtualAddressSpaceSize=2048
+
+# ---- Input ----
+# plays with a controller, docked (1920x1080); no touch or pointer input
+pad_layout	full
+
+# ---- Shader split ----
+# Unreal Engine 4.27 with no shader code archives: each material's shaders inline in its cooked package (.uexp) and the engine's global shaders in Engine/GlobalShaderCache-SF_GLSL_SWITCH.bin,
+# every one an LZ4 block. The pak's blocks are Oodle-compressed: the Android porter decodes them on the device into DM_UE_INLINE_DECODED (the host's Oodle tool mode, DM_OODLE_JOB_EARLY)
+shader_groups	GlobalShaderCache=global #Engine/=engine #GB4/=game
+shader_note	GUNDAM BREAKER 4 shaders

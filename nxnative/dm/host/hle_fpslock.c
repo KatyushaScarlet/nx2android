@@ -47,6 +47,12 @@ static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field
     // (BaseSwitchDeviceProfiles.ini). Registered at main+0x33a4dec (float, IConsoleManager slot 2; AsVariableFloat stored at +0x10) and main+0x149e0bc (int, slot 1; AsVariableInt at +0x10)
     { "84e182f72ee1da4f477804bd05b54c15", "Unreal t.MaxFPS", 0x8c29af0 + 0x10, 0, FPS_F32, 2 },
     { "84e182f72ee1da4f477804bd05b54c15", "Unreal rhi.SyncInterval", 0x8adca10 + 0x10, 0, VSYNCS_I32, 2 },
+    // GUNDAM BREAKER 4 1.12.0: Unreal Engine 4.27's t.MaxFPS at main+0xa0ae7d8 and rhi.SyncInterval at main+0x9f5f0d0 (TAutoConsoleVariable objects, the value pointer at +0x10; found with
+    // ue_cvar.py), and UEngine::FixedFrameRate at [main+0xa0adec8]+0x7a8 (the switch bitfield at +0x7a4 selects it, bit 0x40 = bUseFixedFrameRate; found with ue_fixed_rate.py). The game's
+    // Switch device profile sets rhi.syncinterval=2 and its config FrameRateLimit=30, so it renders 30 fps; the host writes 60 and present interval 1 (fps_target 60)
+    { "ba96dfdf82b7ac48ab945fef316c361c", "Unreal t.MaxFPS", 0xa0ae7d8 + 0x10, 0, FPS_F32, 2 },
+    { "ba96dfdf82b7ac48ab945fef316c361c", "Unreal rhi.SyncInterval", 0x9f5f0d0 + 0x10, 0, VSYNCS_I32, 2 },
+    { "ba96dfdf82b7ac48ab945fef316c361c", "Unreal FixedFrameRate", 0xa0adec8, 0x7a8, FPS_F32, 1 },
     // Luigi's Mansion 3 1.4.0: Next Level Games' frame limiter. At the end of each frame the main thread calls the frame callbacks (main+0xb7c308) with the milliseconds since the frame
     // started; the limiter (main+0x7a3e70) runs jobs or sleeps until 33.333 ms have passed, the float at main+0x13c94dc (read only there, at main+0x7a3ea8 and main+0x7a3f18), and the game
     // steps by the time that really passed. The game asks for present interval 2 too, which the profile's present_interval display ignores; both are needed
