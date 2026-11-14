@@ -1,0 +1,8 @@
+# Rabi-Ribi on Android (keys in docs/ARCHITECTURE.md "Game profiles on Android")
+# CreSpirit's 2D engine on NVN, SDK 7.4.0; update v131072 (display 1.2.0). Its shaders are compiled at run time by the game's own GLSLC (subsdk0): a bootstrap port saved 24 outputs
+# on the device and this profile's tables were split from them. On the AYN Thor (Snapdragon 8 Gen 2, Adreno 740, Android 13): boot, title, save select and gameplay, frame time
+# p50 16.66 ms and no dropped frames in the 300-frame windows, the shared font set to a Pan-CJK Noto Sans, no red log line. The data pack is 0.7 GB.
+status	wip
+tested	v131072 AYN Thor (Snapdragon 8 Gen 2, Adreno 740, Android 13)
+package	org.nx2a.t01005bf00e4de000
+orientation	landscape

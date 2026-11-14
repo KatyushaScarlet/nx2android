@@ -1,0 +1,27 @@
+# kind: evidence  Rabi-Ribi shaders (GLSLC outputs of the game's run-time compiler) → control section + code area keys (dm/gfx/tools/shader_split.py)
+# column 5 records where each key first appears; this game has no PC version to pair with
+package	index	stage	dm_ctl_sha16	source
+ps_other.bin	0	pixel	0fbbddd4cd3e33cc	/glslc_capture/27078f89f4d3298c.glslc#GLSLC@0x0
+ps_other.bin	1	pixel	1b0202b6fac0487e	/glslc_capture/2be35cb919293762.glslc#GLSLC@0x0
+vs_other.bin	0	vertex	fc28076841d657cd	/glslc_capture/2e4908407c3a8200.glslc#GLSLC@0x0
+vs_other.bin	1	vertex	071463d7c40fa60f	/glslc_capture/3305a51521eb068a.glslc#GLSLC@0x0
+ps_other.bin	2	pixel	be1cda5fa571d50e	/glslc_capture/3577d3bd6c6168dc.glslc#GLSLC@0x0
+ps_other.bin	3	pixel	40638ccf6f4af158	/glslc_capture/3a7d6a65e50c7044.glslc#GLSLC@0x0
+ps_other.bin	4	pixel	f067f0b129ea9172	/glslc_capture/45abd5a693b8b1c4.glslc#GLSLC@0x0
+vs_other.bin	2	vertex	943cfabae5351f72	/glslc_capture/5645aa65436b0a06.glslc#GLSLC@0x0
+ps_other.bin	5	pixel	2cd04251a35892a6	/glslc_capture/5bc18d9204a4c63f.glslc#GLSLC@0x0
+ps_other.bin	6	pixel	d70d1181d15c8e22	/glslc_capture/632cad49c89eb60b.glslc#GLSLC@0x0
+ps_other.bin	7	pixel	e94be6ac725c753f	/glslc_capture/6ba833497b4a2780.glslc#GLSLC@0x0
+ps_other.bin	8	pixel	bf3be0761cafa343	/glslc_capture/743c0953ec30bfa7.glslc#GLSLC@0x0
+ps_other.bin	9	pixel	5e9a5bea97492b39	/glslc_capture/89e7115443a38bec.glslc#GLSLC@0x0
+vs_other.bin	3	vertex	fbc64a43fd518d45	/glslc_capture/8b4f7e1687f17d6b.glslc#GLSLC@0x0
+ps_other.bin	10	pixel	8e8c50590b36baa8	/glslc_capture/8c8f5ea5d9b7d638.glslc#GLSLC@0x0
+ps_other.bin	11	pixel	5dd8d38b1d89d025	/glslc_capture/a464e0f62cd0375d.glslc#GLSLC@0x0
+vs_other.bin	4	vertex	9262ca36d353e4fa	/glslc_capture/a8ee64899a567070.glslc#GLSLC@0x0
+ps_other.bin	12	pixel	3d3c56f93aa6490d	/glslc_capture/ac714612cd976ff9.glslc#GLSLC@0x0
+ps_other.bin	13	pixel	97072e4538947f44	/glslc_capture/b64a66e6b20dbad4.glslc#GLSLC@0x0
+vs_other.bin	5	vertex	59446d869d3a6ae2	/glslc_capture/c367c3e3eb7b8dd0.glslc#GLSLC@0x0
+ps_other.bin	14	pixel	c67980cf629976f8	/glslc_capture/c3faf44e969a1153.glslc#GLSLC@0x0
+ps_other.bin	15	pixel	cf3b9811acc962a1	/glslc_capture/d4e6d94b9a9dbc0c.glslc#GLSLC@0x0
+ps_other.bin	16	pixel	59244af7842eb55e	/glslc_capture/db01b230c2f6af76.glslc#GLSLC@0x0
+vs_other.bin	6	vertex	148b3ef3a47eaaf7	/glslc_capture/fe10b96b4f17facb.glslc#GLSLC@0x0
