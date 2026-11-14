@@ -211,6 +211,7 @@ NVN(nvnMemoryPoolBuilderSetFlags, void, NVNmemoryPoolBuilder *b, int f) { ((pool
 static uint8_t *vpool_reserve(pool_t *o); static void vpool_release(pool_t *o);   // sparse virtual pools, see MapVirtual
 static void replay_lock(void); static void replay_unlock(void);   // the replay's state, from a game thread (see "Asynchronous replay")
 static void nvn_drain(void);
+static void dpool_drop_mem_all(const void *mem);   // a freed NVNmemoryPool takes the descriptor pools made over it
 __attribute__((weak)) void vk_pool_set_flags(const void *mem, int flags) { (void)mem; (void)flags; }
 __attribute__((weak)) void dm_perf_replay_thread(void) {}   // Android (perf_android.c): the replay thread's CPU placement   // Android's Vulkan host (gfx_vk_core.c): copied pools by their flags
 NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) {
@@ -227,7 +228,7 @@ static void fl_add(const uint8_t *a, uint64_t n); static void fl_drop(const uint
 static void ft_drop(const uint8_t *a, uint64_t n);   // first-touch textures over a pool that goes, see ft_add
 // Under asynchronous replay the submissions queued before it are replayed first: they may still read the pool (Unicorn Overlord's skipped scenes freed theirs
 // right after submitting, and the replay then found its index buffers outside every pool and the command memory overwritten: a black screen, the sound going on)
-NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) { nvn_drain(); if (((pool_t *)p)->flags & 0x200 && ((pool_t *)p)->vp) vpool_release((pool_t *)p);
+NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) { nvn_drain(); dpool_drop_mem_all(p); if (((pool_t *)p)->flags & 0x200 && ((pool_t *)p)->vp) vpool_release((pool_t *)p);
     if (((pool_t *)p)->mem && !(((pool_t *)p)->flags & 0x200)) {   // A virtual pool's storage is borrowed from a physical pool; do not unregister it
  nvn_dirty_remove_range(((pool_t *)p)->mem); replay_lock(); mtl_pool_del(((pool_t *)p)->mem); replay_unlock(); fl_drop(((pool_t *)p)->mem, ((pool_t *)p)->size); ft_drop(((pool_t *)p)->mem, ((pool_t *)p)->size); }
     replay_lock(); mtl_alias_drop_pool(p); replay_unlock(); ((pool_t *)p)->magic = 0; }
@@ -247,19 +248,34 @@ NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { r
 // Fire Emblem: Three Houses: a 12,544-entry texture pool and a 3,856-entry sampler pool for the scene, and 4,096-entry ones its 2D UI command buffer binds. Both fill IDs from 256 up; the scene's
 // default 8×8 white texture overwrote the UI's textures, and the title menu's labels, the name entry and other menus drew as plain bars or not at all. The scene also registers each draw's
 // textures into fresh IDs of a ring in its large pool (8,729 and up a few seconds in); with the table's capacity taken from the last pool alone, those all read as empty slots and the screen was black
-enum { NDPOOL = 16 };
-static struct dpool_base { const void *pool; int base; } g_tpb[NDPOOL], g_spb[NDPOOL];
+enum { NDPOOL = 1024 };
+// A finalized pool hands its slot and its base range back to the next pool no larger (dpool_del), and a pool whose NVNmemoryPool goes takes its descriptor pools with it
+// (dpool_drop_mem_all). Rabi-Ribi (SDK 7) makes two or three texture and sampler pools a frame and finalizes them; the table that never forgot a pool filled after 16, and the
+// save-select screen and then a map scene read other pools' IDs (random colour blocks, "pools exceed 16"). No live pool is evicted: a game keeps as many as it holds at once.
+static struct dpool_base { const void *pool; const void *mem; int base; int n; } g_tpb[NDPOOL], g_spb[NDPOOL];
 static int g_ntpb, g_nspb, g_tnext, g_snext;
 static pthread_mutex_t g_dpool_mu = PTHREAD_MUTEX_INITIALIZER;
-static int dpool_add(struct dpool_base *t, int *nt, int *next, const void *pool, int n, const char *kind) {   // → the pool's base (assigned at its first Initialize)
+static void dpool_put(struct dpool_base *t, int *nt, int *next, const void *pool, const void *mem, int need) {
+    for (int i = 0; i < *nt; i++) if (!t[i].pool && t[i].n >= need) { t[i].pool = pool; t[i].mem = mem; return; }   // a finalized pool's slot, its base kept
+    if (*nt < NDPOOL) { t[*nt] = (struct dpool_base){pool, mem, *next, need}; (*next) += need; (*nt)++; return; }
+    LOG("[RED] descriptor pools exceed %d live pools: later ones share the first pool's numbering", NDPOOL);
+}
+static int dpool_add(struct dpool_base *t, int *nt, int *next, const void *pool, const void *mem, int n, const char *kind) {   // -> the pool's base (assigned at its first Initialize)
     pthread_mutex_lock(&g_dpool_mu);
     int i = 0; while (i < *nt && t[i].pool != pool) i++;
-    if (i == *nt) {
-        if (*nt == NDPOOL) { pthread_mutex_unlock(&g_dpool_mu); LOG("[RED] %s pools exceed %d: later ones share the first pool's numbering", kind, NDPOOL); return 0; }
-        t[i] = (struct dpool_base){pool, *next}; (*nt)++; *next += (n + 255) & ~255;
-        if (i) LOG("[nvn] pool #%d (%s, %d entries): numbered from %d in the host table, separate from the earlier pools", i + 1, kind, n, t[i].base);
-    }
+    if (i == *nt) { dpool_put(t, nt, next, pool, mem, (n + 255) & ~255); for (i = 0; i < *nt && t[i].pool != pool; i++) ; if (i == *nt) { pthread_mutex_unlock(&g_dpool_mu); return 0; } }
     int b = t[i].base; pthread_mutex_unlock(&g_dpool_mu); return b;
+}
+static void dpool_del(struct dpool_base *t, int *nt, const void *pool) {   // a finalized pool: keep its base range for the next pool no larger
+    pthread_mutex_lock(&g_dpool_mu);
+    for (int i = 0; i < *nt; i++) if (t[i].pool == pool) { t[i].pool = NULL; break; }
+    pthread_mutex_unlock(&g_dpool_mu);
+}
+static void dpool_drop_mem_all(const void *mem) {   // its NVNmemoryPool goes: the descriptor pools made over it go with it
+    pthread_mutex_lock(&g_dpool_mu);
+    for (int i = 0; i < g_ntpb; i++) if (g_tpb[i].mem == mem) g_tpb[i].pool = NULL;
+    for (int i = 0; i < g_nspb; i++) if (g_spb[i].mem == mem) g_spb[i].pool = NULL;
+    pthread_mutex_unlock(&g_dpool_mu);
 }
 static int dpool_base(const struct dpool_base *t, int nt, const void *pool) { for (int i = 0; i < nt; i++) if (t[i].pool == pool) return t[i].base; return 0; }
 int nvn_dpool_base(const void *pool, int tex) { return tex ? dpool_base(g_tpb, g_ntpb, pool) : dpool_base(g_spb, g_nspb, pool); }   // the replay's bound pools (nvn_mtl.m state_op)
@@ -267,10 +283,10 @@ int nvn_dpool_base(const void *pool, int tex) { return tex ? dpool_base(g_tpb, g
 // Dark Souls Remastered binds one of 12 sampler pools in more than 64 command buffers, and every later one read its samplers through the first pool's numbering
 NVN(nvnTexturePoolInitialize, NVNboolean, NVNtexturePool *tp, const NVNmemoryPool *p, ptrdiff_t off, int n) {
     *(dpool_t *)tp = (dpool_t){(const pool_t *)p, off, n}; OLOG("TexturePool n=%d", n);
-    dpool_add(g_tpb, &g_ntpb, &g_tnext, tp, n, "texture"); mtl_set_tex_pool_n(g_tnext);
+    dpool_add(g_tpb, &g_ntpb, &g_tnext, tp, p, n, "texture"); mtl_set_tex_pool_n(g_tnext);
     return 1;
 }
-NVN(nvnTexturePoolFinalize, void, NVNtexturePool *tp) { (void)tp; }
+NVN(nvnTexturePoolFinalize, void, NVNtexturePool *tp) { nvn_drain(); dpool_del(g_tpb, &g_ntpb, tp); }
 NVN(nvnTexturePoolRegisterTexture, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) {
     mtl_reg_tex(dpool_base(g_tpb, g_ntpb, tp) + id, (const tex_t *)t, (const view_t *)v);
 }
@@ -280,9 +296,9 @@ NVN(nvnTexturePoolRegisterImage, void, const NVNtexturePool *tp, int id, const N
     mtl_reg_tex(dpool_base(g_tpb, g_ntpb, tp) + id, (const tex_t *)t, (const view_t *)v);
 }
 NVN(nvnSamplerPoolInitialize, NVNboolean, NVNsamplerPool *sp, const NVNmemoryPool *p, ptrdiff_t off, int n) {
-    *(dpool_t *)sp = (dpool_t){(const pool_t *)p, off, n}; OLOG("SamplerPool n=%d", n); dpool_add(g_spb, &g_nspb, &g_snext, sp, n, "sampler"); return 1;
+    *(dpool_t *)sp = (dpool_t){(const pool_t *)p, off, n}; OLOG("SamplerPool n=%d", n); dpool_add(g_spb, &g_nspb, &g_snext, sp, p, n, "sampler"); return 1;
 }
-NVN(nvnSamplerPoolFinalize, void, NVNsamplerPool *sp) { (void)sp; }
+NVN(nvnSamplerPoolFinalize, void, NVNsamplerPool *sp) { nvn_drain(); dpool_del(g_spb, &g_nspb, sp); }
 NVN(nvnSamplerPoolRegisterSampler, void, const NVNsamplerPool *sp, int id, const NVNsampler *s) { mtl_reg_samp(dpool_base(g_spb, g_nspb, sp) + id, &((const samp_t *)s)->p); }
 // straight from a builder, without a sampler object (FINAL FANTASY TACTICS - The Ivalice Chronicles registers its samplers this way)
 NVN(nvnSamplerPoolRegisterSamplerBuilder, void, const NVNsamplerPool *sp, int id, const NVNsamplerBuilder *b) { mtl_reg_samp(dpool_base(g_spb, g_nspb, sp) + id, &((const samp_builder_t *)b)->p); }
