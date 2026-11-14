@@ -62,7 +62,7 @@ Vulkan indirect compute dispatches copy their three GPU-written group counts int
 
 ## Game profiles on Android
 
-A profile is offered for Android when it has an `android.tsv`; the profiles without one (52 of the 54 today, upstream's iOS games) show as "ios only": an experimental port can still try them. `android.tsv` holds, one `key<TAB>value` row each:
+A profile is offered for Android when it has an `android.tsv`; the profiles without one (53 of the 55 today, upstream's iOS games) show as "ios only": an experimental port can still try them. `android.tsv` holds, one `key<TAB>value` row each:
 
 | Key | Meaning |
 |---|---|
@@ -77,6 +77,15 @@ A profile is offered for Android when it has an `android.tsv`; the profiles with
 | `overlay` | `<tablet\|phone> <control> <x> <y>`: moves one on-screen control of that layout (`dm/android/overlay_default.tsv`) to x, y as fractions of the window, compiled into `android_profile.h` |
 
 Per-build knowledge stays where upstream keeps it: the rewriter's cuts in `patches.py` / `dm/tools/sdk_patches.py`, keyed by build ID.
+
+### Games whose shaders are compiled at run time
+
+Some games keep no shader in their files: their `main` holds GLSL sources and imports `glslcCompile`, and the game compiles the programs it needs with its own GLSLC at boot
+(Fire Emblem: Three Houses' 9 built-in shaders are this case). The Mac pipeline boots such a game once with `DM_GLSLC_CAPTURE` (`dm/host/hle_glslc.c`) and splits the shader
+tables from the outputs. On Android the device does that boot: a first port without `--glslc-captures` is a **bootstrap** port (see `check_graphics`): its shader bundle is
+empty (every shader is compiled at run time), and its data pack's `env.txt` carries `DM_GLSLC_CAPTURE=<files>/glslc_capture`, which makes the app save every run-time compile there
+(Rabi-Ribi: 24 outputs). Pull that folder (`adb pull .../files/glslc_capture`) and port again with `--glslc-captures <folder>`: `shader_split.py` reads the outputs as GLSLC
+shaders and splits the profile's tables from them. The profile lists `/glslc_capture/=runtime` in `shader_groups` once its tables carry the captures.
 
 ## The port
 

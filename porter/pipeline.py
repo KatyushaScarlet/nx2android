@@ -43,6 +43,7 @@ class Options:
     fps60: bool = False                # 60 fps: the profile's own frame-rate cap, else the build's FPSLocker-Warehouse config (porter/fpslocker.py)
     vulkan_driver: Path = None         # an arm64 Vulkan driver (Mesa's Turnip) packed in the APK and used instead of the system's (DM_VK_DRIVER, dm/android/gfx_vk_core.c)
     shared_font: Path = None           # a TrueType font packed as the system's shared fonts, instead of the device's Roboto (DM_SHARED_FONT, dm/host/hle_sdk16.c)
+    glslc_captures: Path = None        # a folder of the game's run-time GLSLC outputs (DM_GLSLC_CAPTURE: <hash>.glslc files); None: a bootstrap port saves them on the device first
     firmware: Path = None              # the player's system content files (.nca), for the profile's sysdata titles (extract_sysdata; DM_SYSDATA, dm/host/hle_fs.c)
     mt_replay: bool = False            # multithread replay: DM_VK_MT_REPLAY=1 in env.txt (dm/android/gfx_vk_dq.c), after the profile's env rows
     touch: bool = False                # a game played by touch: the on-screen gamepad starts hidden (TOUCH_SETTINGS), so it takes none of the game's touches
@@ -280,6 +281,8 @@ class Port:
         for d in (self.aw, self.logs, self.work / 'tmp'): d.mkdir(parents=True, exist_ok=True)
         # DM_GAME picks the profile for every tool; WORK keeps their temporary folders inside the build folder (the shader translator writes thousands of files)
         self.env.update(DM_GAME=g.id, DM_ROOT=str(self.work), WORK=str(self.work / 'tmp'))
+        if self.o.glslc_captures:   # the game's own GLSLC outputs, captured on the device by a bootstrap port, for shader_split.py (hle_glslc.c)
+            self.env['DM_GLSLC_CAPTURE'] = str(Path(self.o.glslc_captures).resolve())
 
     def check_space(self):
         """Stop before extracting when the game folder's drive cannot hold the port: a build folder takes about 1 to 2 times the game files (NEO 7.0 GB of 6.8,
@@ -459,7 +462,13 @@ class Port:
             try: Adb(self.tools['adb'], self.o.device or self.cfg.get('device'), log=say).pick()
             except (AdbError, KeyError) as e: raise BuildError(f"{self.app_name}'s shaders are in Oodle-compressed archives ({why}): the port decodes them with the game's own decoder on "
                                                                f'the Android device, so connect it (adb) and port again ({e})') from e
-        for k in ('glslc_capture', 'ue_legacy') + (() if self.ue_why else ('ue_decode',)) + (() if self.oodle_why else ('oodle_packs',)):
+        if src['glslc_capture'][0] and not self.o.glslc_captures:   # the game compiles its shaders at run time with its own GLSLC: a bootstrap port has the app save them on the device
+            self.glslc_bootstrap = True
+            say(f'[YELLOW] {self.app_name}: run-time GLSLC shaders ({src["glslc_capture"][1]}): porting without their captures; the data pack sets DM_GLSLC_CAPTURE, so the app '
+                'saves every compile to files/glslc_capture and the next port takes that folder (--glslc-captures)')
+        elif src['glslc_capture'][0]:
+            say(f'{self.app_name}: run-time GLSLC shaders ({src["glslc_capture"][1]}): using the captures in {self.o.glslc_captures}')
+        for k in ('ue_legacy',) + (() if self.ue_why else ('ue_decode',)) + (() if self.oodle_why else ('oodle_packs',)):
             if src[k][0]: raise BuildError(f'{self.app_name} needs a step that boots the game in the Mac host ({src[k][1]}), which the Android port cannot run yet')
 
     # ---- the game's own Oodle decoder on the device, for the shader split (Pokémon Legends: Arceus's GFPAKs, Pokémon Legends: Z-A's Trinity packs) ----
@@ -669,6 +678,10 @@ class Port:
                                oodle=self.device_oodle if self.oodle_why else None,   # Oodle-compressed archives: the game's own decoder on the device
                                aoc=self.aoc)   # DLC with shaders of its own (Xenoblade Chronicles 3's archives)
         finally: self.device_oodle_end()
+        if not any(pkg.rglob('*')):   # a bootstrap port: every shader is compiled at run time, and the device saves the outputs for the next port (--glslc-captures)
+            self.dmsv = None
+            PROG.stage('Vulkan shaders'); PROG.end('none: the game compiles its shaders at run time (bootstrap, DM_GLSLC_CAPTURE)')
+            return
         self.dmsv = self.aw / 'shaders.dmsv'; kf = self.aw / 'shaders.dmsv.key'; cap = self.aw / 'captured_shaders'
         PROG.stage('Vulkan shaders', step='building the translator')
         xlate, xkey = self.translator()
@@ -694,7 +707,10 @@ class Port:
             if input_key() != key: raise ValueError('shader inputs changed during export; port again')
         except (OSError, ValueError, TypeError, KeyError) as e:
             raise BuildError(f'invalid shader export: {e} (see {self.logs / "android_shaders.log"})') from e
-        if count == 0: raise BuildError(f'no shader translated (see {self.logs / "android_shaders.log"})')
+        if count == 0:   # a bootstrap port: the split found no shader in the files (see check_graphics)
+            self.dmsv = None
+            PROG.end('none: the game compiles its shaders at run time (bootstrap, DM_GLSLC_CAPTURE)')
+            return
         note = f'{count:,} of {expected:,} shaders, {tmp.stat().st_size / 2**20:,.0f} MB'
         # Unsupported shaders are deterministic for these inputs; retain their report on reuse.
         if not complete:
@@ -827,6 +843,7 @@ class Port:
         dst = self.o.out / f'{app_stem(self.g, self.app_name)}-data'
         man = datapack.build(dst, profile=self.ap, version=self.pkg_ver, display=self.display, patched=self.patched, romfs=self.game / 'RomFS', shaders=self.dmsv,
                              aoc=self.aoc, sysdata=self.sysdata, language=self.lang, package=self.package, env=self.fps_env + font_env + (['DM_VK_MT_REPLAY=1'] if self.o.mt_replay else [])
+                             + ([f'DM_GLSLC_CAPTURE={datapack.files_folder(self.package)}/glslc_capture'] if getattr(self, 'glslc_bootstrap', False) else [])
                              + ([f'DM_VK_DRIVER={driver_lib_name(self.o.vulkan_driver)}'] if self.o.vulkan_driver else []), settings=TOUCH_SETTINGS if self.o.touch else None,
                              files={**self.fps_files, **font_files}, profile_h=getattr(self, 'profile_h', None),
                              progress=lambda what: PROG.set(step=f'linking {what}'))
