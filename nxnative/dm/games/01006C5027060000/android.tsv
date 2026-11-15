@@ -1,0 +1,10 @@
+# Magical Girl Witch Trials on Android (keys in docs/ARCHITECTURE.md "Game profiles on Android")
+# Unity 6000.0.72f1 IL2CPP with FMOD on NVN, SDK 21.4.7; update v65536 (display 2.0.1b, the Chinese Traditional release). 2,421 shaders split from the 644 Addressables bundles,
+# and 2,425 translated to SPIR-V (9.2 MB bundle). The stock host and the rewriter run this build without game-specific changes: the profile is the survey's constants, checked here.
+# Tested 2026-11-15 on the AYN Thor (Snapdragon 8 Gen 2, Adreno 740, Android 13): boot, the title and play at 60 fps (frame time p50 16.66 ms, GPU about 1.2 ms), no dropped frames
+# in the 300-frame windows, no audio underrun, save commits work, the shared font set to a Pan-CJK Noto Sans, no red log line; 21,000 frames logged. The data pack is 2.8 GB.
+# Not tested yet: the whole story and its cinematics, touch input, and other GPUs.
+status	wip
+tested	v65536 AYN Thor (Snapdragon 8 Gen 2, Adreno 740, Android 13)
+package	org.nx2a.t01006c5027060000
+orientation	landscape
